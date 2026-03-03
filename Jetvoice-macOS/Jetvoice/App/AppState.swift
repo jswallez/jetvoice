@@ -171,6 +171,7 @@ final class AppState {
 
             // Check for cancellation after API call
             try Task.checkCancellation()
+            guard !wasCanceled else { return }
 
             print("[Jetvoice] Transcription received: \(transcription)")
             lastTranscription = transcription
@@ -215,7 +216,7 @@ final class AppState {
         } catch let error as AppError {
             // Don't show error if user canceled
             guard !wasCanceled else { return }
-            print("[Jetvoice] AppError: \(error.localizedDescription ?? "unknown")")
+            print("[Jetvoice] AppError: \(error.localizedDescription)")
             self.error = error
         } catch {
             // Don't show error if user canceled
@@ -294,7 +295,7 @@ enum AppError: LocalizedError, Identifiable, Equatable {
     case networkError(String)
     case noAudioRecorded
 
-    var id: String { localizedDescription ?? "unknown" }
+    var id: String { localizedDescription }
 
     var errorDescription: String? {
         switch self {

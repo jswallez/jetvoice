@@ -18,15 +18,18 @@ final class GlobalHotKeyManager {
     fileprivate var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var onHotKeyPressed: (() -> Void)?
+    private var retainedSelf: UnsafeMutableRawPointer?  // Prevent use-after-free in CGEventTap callback
 
     // Configurable hotkey (loaded from UserDefaults, defaults to Option+Space)
     fileprivate var hotKeyCode: CGKeyCode
     fileprivate var requiredModifiers: CGEventFlags
+    fileprivate var isModifierOnlyHotKey: Bool
 
     init() {
         let config = HotKeyConfiguration.load()
         self.hotKeyCode = CGKeyCode(config.keyCode)
         self.requiredModifiers = config.cgModifiers
+        self.isModifierOnlyHotKey = config.isModifierOnly
     }
 
     deinit {
@@ -37,10 +40,11 @@ final class GlobalHotKeyManager {
     func updateHotKey(_ config: HotKeyConfiguration) {
         hotKeyCode = CGKeyCode(config.keyCode)
         requiredModifiers = config.cgModifiers
+        isModifierOnlyHotKey = config.isModifierOnly
         config.save()
 
-        // Restart if currently enabled
-        if isEnabled, let callback = onHotKeyPressed {
+        // Restart listening with new configuration
+        if let callback = onHotKeyPressed {
             stop()
             _ = start(onHotKeyPressed: callback)
         }
@@ -48,7 +52,7 @@ final class GlobalHotKeyManager {
 
     /// Get the current hotkey configuration
     var currentConfiguration: HotKeyConfiguration {
-        HotKeyConfiguration(keyCode: UInt16(hotKeyCode), modifiers: requiredModifiers.rawValue)
+        HotKeyConfiguration(keyCode: UInt16(hotKeyCode), modifiers: requiredModifiers.rawValue, isModifierOnly: isModifierOnlyHotKey)
     }
 
     /// Start listening for the configured hotkey
@@ -66,10 +70,11 @@ final class GlobalHotKeyManager {
 
         // Create event tap for both keyDown and keyUp events
         // We need to capture both to fully suppress the key from reaching system dictation
-        let eventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+        let eventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
 
-        // Use Unmanaged to pass self to C callback
-        let userInfo = Unmanaged.passUnretained(self).toOpaque()
+        // Use Unmanaged.passRetained to prevent use-after-free if callback fires during dealloc
+        let userInfo = Unmanaged.passRetained(self).toOpaque()
+        retainedSelf = userInfo
 
         // Use cghidEventTap to intercept at HID level (before system shortcuts)
         guard let tap = CGEvent.tapCreate(
@@ -132,6 +137,11 @@ final class GlobalHotKeyManager {
         }
         eventTap = nil
         runLoopSource = nil
+        // Release the retained self reference from passRetained
+        if let ptr = retainedSelf {
+            Unmanaged<GlobalHotKeyManager>.fromOpaque(ptr).release()
+            retainedSelf = nil
+        }
         DispatchQueue.main.async {
             self.isEnabled = false
         }
@@ -145,9 +155,19 @@ final class GlobalHotKeyManager {
     /// - Returns: true if the event should be consumed
     // Track if we're waiting for key up (to prevent key repeat triggering multiple times)
     fileprivate var isKeyDown = false
+    // Track modifier-only tap state (press + release without other keys)
+    fileprivate var modifierTapPending = false
 
     fileprivate func handleKeyEvent(keyCode: CGKeyCode, flags: CGEventFlags, isKeyDown eventIsKeyDown: Bool) -> Bool {
-        // Check if this is our hotkey (Space) with required modifier (Option)
+        // Cancel modifier-only tap if any regular key is pressed
+        if eventIsKeyDown {
+            modifierTapPending = false
+        }
+
+        // Modifier-only hotkeys are handled in handleFlagsChanged
+        guard !isModifierOnlyHotKey else { return false }
+
+        // Check if this is our hotkey with required modifier
         let hasRequiredModifier = flags.contains(requiredModifiers)
 
         if keyCode == hotKeyCode && hasRequiredModifier {
@@ -166,6 +186,33 @@ final class GlobalHotKeyManager {
             return true  // Consume the event
         }
         return false
+    }
+
+    /// Handle modifier key changes for modifier-only hotkeys (e.g., "Right ⌥" alone)
+    fileprivate func handleFlagsChanged(keyCode: CGKeyCode, flags: CGEventFlags) -> Bool {
+        guard isModifierOnlyHotKey else { return false }
+        guard keyCode == hotKeyCode else {
+            // Different modifier key pressed - cancel pending tap
+            modifierTapPending = false
+            return false
+        }
+
+        guard let targetFlag = HotKeyConfiguration.modifierFlag(forKeyCode: UInt16(keyCode)) else {
+            return false
+        }
+
+        if flags.contains(targetFlag) {
+            // Modifier key went down
+            modifierTapPending = true
+        } else if modifierTapPending {
+            // Modifier key went up after being pressed alone - trigger hotkey
+            modifierTapPending = false
+            DispatchQueue.main.async { [weak self] in
+                self?.onHotKeyPressed?()
+            }
+        }
+
+        return false  // Don't consume flagsChanged events
     }
 }
 
@@ -195,6 +242,15 @@ private func globalHotKeyCallback(
     let manager = Unmanaged<GlobalHotKeyManager>.fromOpaque(userInfo).takeUnretainedValue()
     let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
     let flags = event.flags
+
+    // Handle modifier key changes (for modifier-only hotkeys)
+    if type == .flagsChanged {
+        if manager.handleFlagsChanged(keyCode: keyCode, flags: flags) {
+            return nil
+        }
+        return Unmanaged.passRetained(event)
+    }
+
     let isKeyDown = (type == .keyDown)
 
     if manager.handleKeyEvent(keyCode: keyCode, flags: flags, isKeyDown: isKeyDown) {

@@ -90,7 +90,7 @@ struct MenuBarView: View {
             HStack {
                 Image(systemName: appState.isRecording ? "stop.circle.fill" : "mic.circle.fill")
                     .font(.title2)
-                Text(appState.isRecording ? "Stop Recording (⌥Space)" : "Start Recording (⌥Space)")
+                Text(appState.isRecording ? "Stop Recording (\(appState.hotKeyManager.currentConfiguration.displayString))" : "Start Recording (\(appState.hotKeyManager.currentConfiguration.displayString))")
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
@@ -177,7 +177,7 @@ struct MenuBarView: View {
         HStack {
             Image(systemName: "exclamationmark.circle.fill")
                 .foregroundStyle(.red)
-            Text(error.localizedDescription ?? "Unknown error")
+            Text(error.localizedDescription)
                 .font(.caption)
                 .foregroundStyle(.red)
                 .lineLimit(2)

@@ -171,8 +171,8 @@ final class TextInjector {
         // Simulate Cmd+V
         try simulatePaste()
 
-        // Restore previous clipboard after a delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        // Restore previous clipboard after a delay (500ms to handle slow apps like Electron)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             if let previous = previousContents {
                 pasteboard.clearContents()
                 pasteboard.setString(previous, forType: .string)

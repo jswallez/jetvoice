@@ -48,8 +48,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Use a simple timer to poll the state for icon updates
         iconUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            guard let self else { return }
             Task { @MainActor in
-                self?.updateStatusItemIcon()
+                self.updateStatusItemIcon()
             }
         }
 

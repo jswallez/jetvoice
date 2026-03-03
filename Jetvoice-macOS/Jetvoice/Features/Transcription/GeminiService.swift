@@ -161,13 +161,14 @@ actor GeminiService {
         let model = getSelectedModel()
         print("[Jetvoice] Using model: \(model)")
 
-        guard let url = URL(string: "\(baseURL)/models/\(model):generateContent?key=\(apiKey)") else {
+        guard let url = URL(string: "\(baseURL)/models/\(model):generateContent") else {
             throw GeminiError.invalidURL
         }
 
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
 
         let encoder = JSONEncoder()
         urlRequest.httpBody = try encoder.encode(request)

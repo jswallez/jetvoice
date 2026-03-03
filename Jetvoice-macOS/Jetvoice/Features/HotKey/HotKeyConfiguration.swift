@@ -13,6 +13,21 @@ import Carbon.HIToolbox
 struct HotKeyConfiguration: Codable, Equatable {
     var keyCode: UInt16
     var modifiers: UInt64  // CGEventFlags raw value
+    var isModifierOnly: Bool
+
+    init(keyCode: UInt16, modifiers: UInt64, isModifierOnly: Bool = false) {
+        self.keyCode = keyCode
+        self.modifiers = modifiers
+        self.isModifierOnly = isModifierOnly
+    }
+
+    // Backward-compatible decoding (isModifierOnly may be absent in older configs)
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        keyCode = try container.decode(UInt16.self, forKey: .keyCode)
+        modifiers = try container.decode(UInt64.self, forKey: .modifiers)
+        isModifierOnly = try container.decodeIfPresent(Bool.self, forKey: .isModifierOnly) ?? false
+    }
 
     // MARK: - Default Configuration
 
@@ -57,6 +72,10 @@ struct HotKeyConfiguration: Codable, Equatable {
 
     /// Human-readable display string (e.g., "⌥ Space", "⌘⇧ K")
     var displayString: String {
+        if isModifierOnly {
+            return modifierKeyDisplayName
+        }
+
         var parts: [String] = []
         let flags = cgModifiers
 
@@ -113,6 +132,37 @@ struct HotKeyConfiguration: Codable, Equatable {
             // Try to get character from key code
             return characterForKeyCode(keyCode) ?? "Key \(keyCode)"
         }
+    }
+
+    /// Display name for modifier-only shortcuts (e.g., "Right ⌥")
+    private var modifierKeyDisplayName: String {
+        switch Int(keyCode) {
+        case kVK_RightOption: return "Right ⌥"
+        case kVK_Option: return "Left ⌥"
+        case kVK_RightCommand: return "Right ⌘"
+        case kVK_Command: return "Left ⌘"
+        case kVK_RightShift: return "Right ⇧"
+        case kVK_Shift: return "Left ⇧"
+        case kVK_RightControl: return "Right ⌃"
+        case kVK_Control: return "Left ⌃"
+        default: return "Key \(keyCode)"
+        }
+    }
+
+    /// Returns the CGEventFlags mask for a modifier key code
+    static func modifierFlag(forKeyCode keyCode: UInt16) -> CGEventFlags? {
+        switch Int(keyCode) {
+        case kVK_Option, kVK_RightOption: return .maskAlternate
+        case kVK_Command, kVK_RightCommand: return .maskCommand
+        case kVK_Shift, kVK_RightShift: return .maskShift
+        case kVK_Control, kVK_RightControl: return .maskControl
+        default: return nil
+        }
+    }
+
+    /// Check if a key code belongs to a modifier key
+    static func isModifierKeyCode(_ keyCode: UInt16) -> Bool {
+        modifierFlag(forKeyCode: keyCode) != nil
     }
 
     /// Convert key code to character string using TIS (Text Input Source)

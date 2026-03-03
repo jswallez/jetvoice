@@ -6,7 +6,7 @@
 //  Updated for macOS 15+ with proper cleanup
 //
 
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 
 actor AudioRecorder {
@@ -159,7 +159,7 @@ actor AudioRecorder {
         onMaxDurationReached?()
     }
 
-    func stopRecording() throws -> Data {
+    func stopRecording() async throws -> Data {
         print("[Jetvoice] AudioRecorder.stopRecording called")
 
         // Cancel max duration timer
@@ -181,10 +181,14 @@ actor AudioRecorder {
 
         print("[Jetvoice] Recording file URL: \(fileURL)")
 
-        // Stop the tap and engine
+        // Stop the tap and engine (no new buffers will arrive after this)
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         print("[Jetvoice] Audio engine stopped")
+
+        // Yield to let any queued buffer-processing Tasks drain through the actor
+        // After removeTap, no new callbacks fire, but already-dispatched Tasks may be pending
+        try? await Task.sleep(for: .milliseconds(100))
 
         // Clear references
         audioEngine = nil
@@ -218,7 +222,7 @@ actor AudioRecorder {
         ) else { return }
 
         var error: NSError?
-        var inputBuffer: AVAudioPCMBuffer? = buffer
+        nonisolated(unsafe) var inputBuffer: AVAudioPCMBuffer? = buffer
 
         let status = converter.convert(to: outputBuffer, error: &error) { _, outStatus in
             if inputBuffer != nil {

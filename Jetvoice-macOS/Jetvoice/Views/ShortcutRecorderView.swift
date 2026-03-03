@@ -62,8 +62,55 @@ struct ShortcutRecorderView: View {
         isRecording = true
         onRecordingStarted()
 
-        // Install local event monitor for key events
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [self] event in
+        // State for modifier-only shortcut detection (e.g., "Right ⌥" alone)
+        var pendingModifierKeyCode: UInt16? = nil
+
+        // Install local event monitor for key and modifier events
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [self] event in
+            // Handle modifier key taps (for modifier-only shortcuts like "Right ⌥")
+            if event.type == .flagsChanged {
+                let keyCode = event.keyCode
+
+                if HotKeyConfiguration.isModifierKeyCode(keyCode) {
+                    // Map key code to its NSEvent modifier flag
+                    let nsFlag: NSEvent.ModifierFlags
+                    switch Int(keyCode) {
+                    case kVK_Option, kVK_RightOption: nsFlag = .option
+                    case kVK_Command, kVK_RightCommand: nsFlag = .command
+                    case kVK_Shift, kVK_RightShift: nsFlag = .shift
+                    case kVK_Control, kVK_RightControl: nsFlag = .control
+                    default: return event
+                    }
+
+                    let isDown = event.modifierFlags.contains(nsFlag)
+
+                    if isDown && pendingModifierKeyCode == nil {
+                        // Modifier key pressed - start tracking for potential tap
+                        pendingModifierKeyCode = keyCode
+                    } else if !isDown && pendingModifierKeyCode == keyCode {
+                        // Our tracked modifier was released without any key press - it's a tap
+                        let newConfig = HotKeyConfiguration(
+                            keyCode: keyCode,
+                            modifiers: 0,
+                            isModifierOnly: true
+                        )
+                        pendingModifierKeyCode = nil
+                        DispatchQueue.main.async {
+                            self.finishRecording(with: newConfig)
+                        }
+                        return nil
+                    } else {
+                        // Different modifier or state mismatch - cancel tracking
+                        pendingModifierKeyCode = nil
+                    }
+                }
+
+                return event  // Don't consume flagsChanged events
+            }
+
+            // Regular key pressed - cancel any pending modifier-only detection
+            pendingModifierKeyCode = nil
+
             // Check if Escape was pressed to cancel
             if event.keyCode == UInt16(kVK_Escape) {
                 // Defer to avoid removing monitor while inside callback
