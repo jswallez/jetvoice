@@ -204,11 +204,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             sharedAppState.clearPendingTranscription()
         }
 
-        // Clear error after user has seen it (they opened the popover)
-        // Keep error visible in the popover but clear the red dot on next state change
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            sharedAppState.error = nil
-        }
+        // Error stays visible until user starts a new recording or adds/updates their API key
     }
 
     // MARK: - Window Management

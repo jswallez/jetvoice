@@ -158,9 +158,10 @@ final class GlobalHotKeyManager {
     // Track modifier-only tap state (press + release without other keys)
     fileprivate var modifierTapPending = false
 
-    fileprivate func handleKeyEvent(keyCode: CGKeyCode, flags: CGEventFlags, isKeyDown eventIsKeyDown: Bool) -> Bool {
-        // Cancel modifier-only tap if any regular key is pressed
-        if eventIsKeyDown {
+    fileprivate func handleKeyEvent(keyCode: CGKeyCode, flags: CGEventFlags, isKeyDown eventIsKeyDown: Bool, isAutoRepeat: Bool) -> Bool {
+        // Cancel modifier-only tap if any regular key is newly pressed
+        // Auto-repeat events come from keys held before the modifier and shouldn't cancel the tap
+        if eventIsKeyDown && !isAutoRepeat {
             modifierTapPending = false
         }
 
@@ -225,6 +226,7 @@ private func globalHotKeyCallback(
 ) -> Unmanaged<CGEvent>? {
     // Handle tap disabled event (system can disable taps if they're slow)
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        print("[Jetvoice] Event tap was disabled by \(type == .tapDisabledByTimeout ? "timeout" : "user input"), re-enabling...")
         // Re-enable the tap
         if let userInfo = userInfo {
             let manager = Unmanaged<GlobalHotKeyManager>.fromOpaque(userInfo).takeUnretainedValue()
@@ -252,8 +254,9 @@ private func globalHotKeyCallback(
     }
 
     let isKeyDown = (type == .keyDown)
+    let isAutoRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
 
-    if manager.handleKeyEvent(keyCode: keyCode, flags: flags, isKeyDown: isKeyDown) {
+    if manager.handleKeyEvent(keyCode: keyCode, flags: flags, isKeyDown: isKeyDown, isAutoRepeat: isAutoRepeat) {
         return nil  // Consume the event (don't pass it to other apps or system)
     }
 

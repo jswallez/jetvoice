@@ -31,10 +31,11 @@ struct HotKeyConfiguration: Codable, Equatable {
 
     // MARK: - Default Configuration
 
-    /// Default hotkey: Option+Space
+    /// Default hotkey: Right Option key (modifier-only)
     static let defaultHotKey = HotKeyConfiguration(
-        keyCode: UInt16(kVK_Space),
-        modifiers: CGEventFlags.maskAlternate.rawValue
+        keyCode: UInt16(kVK_RightOption),
+        modifiers: CGEventFlags.maskAlternate.rawValue,
+        isModifierOnly: true
     )
 
     // MARK: - UserDefaults Storage
