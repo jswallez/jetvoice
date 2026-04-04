@@ -204,7 +204,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             sharedAppState.clearPendingTranscription()
         }
 
-        // Error stays visible until user starts a new recording or adds/updates their API key
+        // Clear error when user opens popover — they've acknowledged it
+        if sharedAppState.error != nil {
+            sharedAppState.error = nil
+        }
     }
 
     // MARK: - Window Management

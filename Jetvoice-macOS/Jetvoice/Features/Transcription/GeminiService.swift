@@ -144,10 +144,9 @@ actor GeminiService {
             contents: [
                 TranscriptionRequest.Content(parts: [
                     TranscriptionRequest.Part(text: """
-                        Transcribe this audio accurately.
-                        Detect the language automatically.
-                        Return only the transcription text, no additional commentary or formatting.
-                        If multiple languages are spoken, transcribe each in its original language.
+                        Transcribe this audio exactly as spoken. \
+                        Output only the verbatim transcription text — no language labels, \
+                        no commentary, no formatting, no prefixes, no metadata.
                         """),
                     TranscriptionRequest.Part(audioData: audioData, mimeType: "audio/wav")
                 ])
