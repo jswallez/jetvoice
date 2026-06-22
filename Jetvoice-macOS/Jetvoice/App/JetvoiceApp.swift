@@ -51,9 +51,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         updateStatusItemIcon()
         observeStateForIcon()
 
+        // Poll permissions while any are missing so the yellow dot clears as soon
+        // as the user grants them in System Settings (stops once all granted).
+        updatePermissionWatch()
+
         // Show onboarding on first launch
         if !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
             showOnboarding()
+        }
+    }
+
+    private var permissionWatchTimer: Timer?
+
+    /// Runs a low-frequency permission refresh ONLY while a permission is missing,
+    /// so the menu-bar warning dot disappears right after the user grants access.
+    /// Invalidates itself once everything is granted (no permanent polling).
+    private func updatePermissionWatch() {
+        if sharedAppState.permissionsGranted.allGranted {
+            permissionWatchTimer?.invalidate()
+            permissionWatchTimer = nil
+        } else if permissionWatchTimer == nil {
+            permissionWatchTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    sharedAppState.refreshPermissions()
+                    self.updatePermissionWatch()
+                }
+            }
         }
     }
 
@@ -66,6 +90,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             _ = sharedAppState.isProcessing
             _ = sharedAppState.pendingTranscription
             _ = sharedAppState.error
+            _ = sharedAppState.permissionsGranted
         } onChange: {
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -135,6 +160,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             currentState = "pending"
         } else if sharedAppState.error != nil {
             currentState = "error"
+        } else if !sharedAppState.permissionsGranted.allGranted {
+            currentState = "needsPermission"
         } else {
             currentState = "ready"
         }
@@ -159,6 +186,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             addStatusDot(to: button, color: NSColor(red: 0.6, green: 0.2, blue: 0.9, alpha: 1.0)) // Purple
         } else if sharedAppState.pendingTranscription != nil || sharedAppState.error != nil {
             addStatusDot(to: button, color: NSColor(red: 1.0, green: 0.2, blue: 0.2, alpha: 1.0)) // Red
+        } else if !sharedAppState.permissionsGranted.allGranted {
+            addStatusDot(to: button, color: NSColor(red: 1.0, green: 0.8, blue: 0.0, alpha: 1.0)) // Yellow — permissions missing
         }
     }
 
@@ -192,6 +221,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Refresh permissions when opening
         sharedAppState.refreshPermissions()
+        updatePermissionWatch()
 
         // Create a fresh popover
         let newPopover = NSPopover()
@@ -265,6 +295,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        permissionWatchTimer?.invalidate()
+
         Task {
             await sharedAppState.audioRecorder.cancelRecording()
             sharedAppState.hotKeyManager.stop()
