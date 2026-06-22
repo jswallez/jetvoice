@@ -9,10 +9,109 @@
 @preconcurrency import AVFoundation
 import Foundation
 
+/// Converts incoming microphone buffers to 16 kHz mono PCM16 and accumulates
+/// them in memory, synchronously and in order, directly on the audio render
+/// thread.
+///
+/// This is deliberately NOT actor-isolated: the input tap calls `append` on its
+/// own real-time thread, one buffer at a time, in order. Doing the work inline
+/// (rather than dispatching an async `Task` per buffer) removes two hazards that
+/// the previous implementation had:
+///   1. buffer reordering — independent `Task`s have no FIFO guarantee, so
+///      writes could land out of order and scramble the audio;
+///   2. buffer lifetime — the engine may recycle a buffer once the tap returns,
+///      so deferring its read to a later Task was unsafe.
+/// Accumulated PCM is guarded by a lock so the recorder thread (append) and the
+/// caller thread (makeWAV) can't race. No temp file is touched.
+nonisolated final class PCMRecorder: @unchecked Sendable {
+    private let converter: AVAudioConverter
+    private let outputFormat: AVAudioFormat
+    private let lock = NSLock()
+    private var pcm = Data()
+
+    init?(inputFormat: AVAudioFormat, outputFormat: AVAudioFormat) {
+        guard let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
+            return nil
+        }
+        self.converter = converter
+        self.outputFormat = outputFormat
+    }
+
+    /// Called synchronously from the input tap (audio render thread).
+    func append(_ buffer: AVAudioPCMBuffer) {
+        let ratio = outputFormat.sampleRate / buffer.format.sampleRate
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1
+
+        guard let out = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else {
+            return
+        }
+
+        var error: NSError?
+        var input: AVAudioPCMBuffer? = buffer
+        let status = converter.convert(to: out, error: &error) { _, outStatus in
+            if input != nil {
+                outStatus.pointee = .haveData
+                defer { input = nil }
+                return input
+            }
+            outStatus.pointee = .noDataNow
+            return nil
+        }
+
+        guard status != .error, error == nil, out.frameLength > 0,
+              let channel = out.int16ChannelData else { return }
+
+        let frames = Int(out.frameLength)
+        lock.lock()
+        pcm.append(UnsafeBufferPointer(start: channel[0], count: frames))
+        lock.unlock()
+    }
+
+    /// Snapshot the accumulated PCM as a complete in-memory WAV file.
+    func makeWAV() -> Data {
+        lock.lock()
+        let body = pcm
+        lock.unlock()
+        return Self.wavData(
+            pcm: body,
+            sampleRate: Int(outputFormat.sampleRate),
+            channels: Int(outputFormat.channelCount),
+            bitsPerSample: 16
+        )
+    }
+
+    /// Build a canonical 44-byte-header PCM WAV from raw little-endian samples.
+    /// Pure function — unit tested.
+    static func wavData(pcm: Data, sampleRate: Int, channels: Int, bitsPerSample: Int) -> Data {
+        let byteRate = sampleRate * channels * bitsPerSample / 8
+        let blockAlign = channels * bitsPerSample / 8
+        let dataLen = pcm.count
+
+        var out = Data(capacity: 44 + dataLen)
+        func u32(_ v: UInt32) { var x = v.littleEndian; withUnsafeBytes(of: &x) { out.append(contentsOf: $0) } }
+        func u16(_ v: UInt16) { var x = v.littleEndian; withUnsafeBytes(of: &x) { out.append(contentsOf: $0) } }
+
+        out.append(contentsOf: Array("RIFF".utf8))
+        u32(UInt32(36 + dataLen))
+        out.append(contentsOf: Array("WAVE".utf8))
+        out.append(contentsOf: Array("fmt ".utf8))
+        u32(16)                          // PCM fmt chunk size
+        u16(1)                           // audio format = PCM
+        u16(UInt16(channels))
+        u32(UInt32(sampleRate))
+        u32(UInt32(byteRate))
+        u16(UInt16(blockAlign))
+        u16(UInt16(bitsPerSample))
+        out.append(contentsOf: Array("data".utf8))
+        u32(UInt32(dataLen))
+        out.append(pcm)
+        return out
+    }
+}
+
 actor AudioRecorder {
     private var audioEngine: AVAudioEngine?
-    private var audioFile: AVAudioFile?
-    private var recordingURL: URL?
+    private var recorder: PCMRecorder?
     private var recordingStartTime: Date?
     private var maxDurationTimer: Task<Void, Never>?
 
@@ -23,7 +122,7 @@ actor AudioRecorder {
     private let targetChannels: AVAudioChannelCount = 1
 
     // Maximum recording duration (10 minutes) to stay within Gemini API limits
-    // At 16kHz mono 16-bit, 10 minutes produces ~19MB which is under the ~25MB inline limit
+    // At 16kHz mono 16-bit, 10 minutes produces ~19MB.
     static let maxRecordingDuration: TimeInterval = 10 * 60  // 10 minutes
 
     // Callback when max duration is reached
@@ -41,13 +140,7 @@ actor AudioRecorder {
             engine.stop()
         }
         audioEngine = nil
-        audioFile = nil
-
-        // Clean up temp file
-        if let url = recordingURL {
-            try? FileManager.default.removeItem(at: url)
-            recordingURL = nil
-        }
+        recorder = nil
     }
 
     enum RecorderError: LocalizedError {
@@ -93,12 +186,6 @@ actor AudioRecorder {
             throw RecorderError.inputNodeUnavailable
         }
 
-        // Create temporary file for recording
-        let tempDir = FileManager.default.temporaryDirectory
-        let fileName = "jetvoice_recording_\(UUID().uuidString).wav"
-        let fileURL = tempDir.appendingPathComponent(fileName)
-        recordingURL = fileURL
-
         // Create output format (PCM 16-bit for WAV)
         guard let outputFormat = AVAudioFormat(
             commonFormat: .pcmFormatInt16,
@@ -109,26 +196,17 @@ actor AudioRecorder {
             throw RecorderError.formatConversionFailed
         }
 
-        // Create audio file
-        audioFile = try AVAudioFile(
-            forWriting: fileURL,
-            settings: outputFormat.settings,
-            commonFormat: .pcmFormatInt16,
-            interleaved: true
-        )
-
-        // Create converter for sample rate conversion
-        guard let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
+        guard let recorder = PCMRecorder(inputFormat: inputFormat, outputFormat: outputFormat) else {
             throw RecorderError.formatConversionFailed
         }
+        self.recorder = recorder
 
-        // Install tap on input node
-        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, _ in
-            guard let self = self else { return }
-
-            Task {
-                await self.processBuffer(buffer, converter: converter, outputFormat: outputFormat)
-            }
+        // Install tap. The buffer is converted and appended SYNCHRONOUSLY on the
+        // render thread (capturing `recorder` directly, not via the actor) so
+        // writes stay strictly in order and the buffer is consumed before the
+        // engine can recycle it.
+        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { buffer, _ in
+            recorder.append(buffer)
         }
 
         engine.prepare()
@@ -174,75 +252,24 @@ actor AudioRecorder {
         }
         recordingStartTime = nil
 
-        guard let engine = audioEngine, let fileURL = recordingURL else {
+        guard let engine = audioEngine, let recorder = recorder else {
             print("[Jetvoice] ERROR: No recording available")
             throw RecorderError.noRecordingAvailable
         }
 
-        print("[Jetvoice] Recording file URL: \(fileURL)")
-
-        // Stop the tap and engine (no new buffers will arrive after this)
+        // Stop the tap and engine. After removeTap returns, no further `append`
+        // calls happen; the last in-flight call (if any) completes synchronously
+        // on the render thread, so the accumulated PCM is final here.
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         print("[Jetvoice] Audio engine stopped")
 
-        // Yield to let any queued buffer-processing Tasks drain through the actor
-        // After removeTap, no new callbacks fire, but already-dispatched Tasks may be pending
-        try? await Task.sleep(for: .milliseconds(100))
-
-        // Clear references
         audioEngine = nil
-        audioFile = nil
+        self.recorder = nil
 
-        // Read the recorded file
-        let audioData = try Data(contentsOf: fileURL)
-        print("[Jetvoice] Read audio file: \(audioData.count) bytes")
-
-        // Clean up temp file
-        try? FileManager.default.removeItem(at: fileURL)
-        recordingURL = nil
-
+        let audioData = recorder.makeWAV()
+        print("[Jetvoice] Built in-memory WAV: \(audioData.count) bytes")
         return audioData
-    }
-
-    private func processBuffer(
-        _ buffer: AVAudioPCMBuffer,
-        converter: AVAudioConverter,
-        outputFormat: AVAudioFormat
-    ) {
-        guard let audioFile = audioFile else { return }
-
-        // Calculate output buffer size based on sample rate ratio
-        let ratio = outputFormat.sampleRate / buffer.format.sampleRate
-        let outputFrameCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1
-
-        guard let outputBuffer = AVAudioPCMBuffer(
-            pcmFormat: outputFormat,
-            frameCapacity: outputFrameCapacity
-        ) else { return }
-
-        var error: NSError?
-        nonisolated(unsafe) var inputBuffer: AVAudioPCMBuffer? = buffer
-
-        let status = converter.convert(to: outputBuffer, error: &error) { _, outStatus in
-            if inputBuffer != nil {
-                outStatus.pointee = .haveData
-                let result = inputBuffer
-                inputBuffer = nil
-                return result
-            } else {
-                outStatus.pointee = .noDataNow
-                return nil
-            }
-        }
-
-        guard status != .error, error == nil, outputBuffer.frameLength > 0 else { return }
-
-        do {
-            try audioFile.write(from: outputBuffer)
-        } catch {
-            print("Error writing audio buffer: \(error)")
-        }
     }
 
     func isRecording() -> Bool {

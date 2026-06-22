@@ -22,14 +22,28 @@ struct MenuBarView: View {
             // Recording Button
             recordingButton
 
-            // Processing indicator
+            // Live recording timer
+            if appState.isRecording, let start = appState.recordingStartedAt {
+                TimelineView(.periodic(from: start, by: 1)) { context in
+                    HStack(spacing: 6) {
+                        Circle().fill(.orange).frame(width: 8, height: 8)
+                        Text("Recording \(Self.elapsed(since: start, now: context.date))")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            // Processing indicator with elapsed time
             if appState.isProcessing {
-                HStack {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                    Text("Transcribing...")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                let start = appState.processingStartedAt ?? Date()
+                TimelineView(.periodic(from: start, by: 1)) { context in
+                    HStack(spacing: 6) {
+                        ProgressView().scaleEffect(0.7)
+                        Text("Transcribing… \(Self.elapsed(since: start, now: context.date))")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
@@ -204,6 +218,16 @@ struct MenuBarView: View {
         }
         .padding(.horizontal)
         .padding(.bottom, 4)
+    }
+
+    // MARK: - Helpers
+
+    /// Formats elapsed time as m:ss (or s when under a minute).
+    static func elapsed(since start: Date, now: Date) -> String {
+        let total = max(0, Int(now.timeIntervalSince(start)))
+        let minutes = total / 60
+        let seconds = total % 60
+        return minutes > 0 ? String(format: "%d:%02d", minutes, seconds) : "\(seconds)s"
     }
 
     // MARK: - Computed Properties

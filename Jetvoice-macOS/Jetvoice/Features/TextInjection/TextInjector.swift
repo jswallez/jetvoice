@@ -31,46 +31,6 @@ final class TextInjector {
     // Track the frontmost app when injection starts
     private var targetAppBundleId: String?
 
-    /// Types the given text at the current cursor position using CGEvent keyboard simulation
-    func typeText(_ text: String) throws {
-        print("[Jetvoice] TextInjector.typeText called with \(text.count) characters")
-
-        // Check Accessibility permission
-        let isTrusted = AXIsProcessTrusted()
-        print("[Jetvoice] AXIsProcessTrusted: \(isTrusted)")
-
-        guard isTrusted else {
-            print("[Jetvoice] ERROR: Accessibility not granted")
-            throw InjectionError.accessibilityNotGranted
-        }
-
-        // Remember which app we're injecting into
-        targetAppBundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        print("[Jetvoice] Target app: \(targetAppBundleId ?? "unknown")")
-
-        // Don't inject if Jetvoice itself is frontmost (user clicked menu bar icon)
-        if targetAppBundleId?.contains("Jetvoice") == true {
-            print("[Jetvoice] Jetvoice is frontmost - skipping injection")
-            throw InjectionError.focusLost
-        }
-
-        print("[Jetvoice] Starting to type text...")
-        // Type each character
-        for (index, character) in text.enumerated() {
-            // Check focus BEFORE typing to detect loss immediately and prevent system beeps
-            let currentApp = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-            if currentApp != targetAppBundleId {
-                print("[Jetvoice] Focus lost at character \(index)! Was: \(targetAppBundleId ?? "unknown"), Now: \(currentApp ?? "unknown")")
-                throw InjectionError.focusLost
-            }
-
-            try typeCharacter(character)
-            // Small delay to prevent dropped characters
-            usleep(3000)  // 3ms
-        }
-        print("[Jetvoice] Finished typing \(text.count) characters")
-    }
-
     /// Remember the app that should receive injection (called when recording starts)
     func rememberTargetApp() {
         targetAppBundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
@@ -90,60 +50,8 @@ final class TextInjector {
         return currentApp == target
     }
 
-    private func typeCharacter(_ char: Character) throws {
-        let string = String(char)
-
-        // Handle newlines specially
-        if char == "\n" {
-            try pressKey(keyCode: 0x24)  // kVK_Return
-            return
-        }
-
-        // Handle tabs
-        if char == "\t" {
-            try pressKey(keyCode: 0x30)  // kVK_Tab
-            return
-        }
-
-        // For regular characters, use Unicode input
-        for scalar in string.unicodeScalars {
-            try typeUnicodeScalar(scalar)
-        }
-    }
-
-    private func pressKey(keyCode: CGKeyCode) throws {
-        guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) else {
-            throw InjectionError.eventCreationFailed
-        }
-
-        keyDown.post(tap: .cgAnnotatedSessionEventTap)
-        keyUp.post(tap: .cgAnnotatedSessionEventTap)
-    }
-
-    private func typeUnicodeScalar(_ scalar: Unicode.Scalar) throws {
-        // Create key down event
-        guard let keyDownEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
-            throw InjectionError.eventCreationFailed
-        }
-
-        // Set the Unicode string
-        var unicodeChar = UniChar(scalar.value)
-        keyDownEvent.keyboardSetUnicodeString(stringLength: 1, unicodeString: &unicodeChar)
-
-        // Create key up event
-        guard let keyUpEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else {
-            throw InjectionError.eventCreationFailed
-        }
-        keyUpEvent.keyboardSetUnicodeString(stringLength: 1, unicodeString: &unicodeChar)
-
-        // Post events
-        keyDownEvent.post(tap: .cgAnnotatedSessionEventTap)
-        keyUpEvent.post(tap: .cgAnnotatedSessionEventTap)
-    }
-
-    /// Alternative method: Copy text to clipboard and simulate Cmd+V paste
-    /// This is more reliable for long text
+    /// Copy text to clipboard and simulate Cmd+V paste, then restore the user's
+    /// previous clipboard contents (all types, not just plain text).
     func pasteText(_ text: String) throws {
         guard AXIsProcessTrusted() else {
             throw InjectionError.accessibilityNotGranted
@@ -160,9 +68,20 @@ final class TextInjector {
             throw InjectionError.focusLost
         }
 
-        // Save current clipboard
+        // Snapshot the full current clipboard (every representation: RTF, images,
+        // files, …) so we can restore exactly what the user had — not just text.
         let pasteboard = NSPasteboard.general
-        let previousContents = pasteboard.string(forType: .string)
+        let snapshot = pasteboard.pasteboardItems?.compactMap { item -> NSPasteboardItem? in
+            let copy = NSPasteboardItem()
+            var copiedAnything = false
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    copy.setData(data, forType: type)
+                    copiedAnything = true
+                }
+            }
+            return copiedAnything ? copy : nil
+        }
 
         // Set new text
         pasteboard.clearContents()
@@ -173,10 +92,9 @@ final class TextInjector {
 
         // Restore previous clipboard after a delay (500ms to handle slow apps like Electron)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            if let previous = previousContents {
-                pasteboard.clearContents()
-                pasteboard.setString(previous, forType: .string)
-            }
+            guard let snapshot, !snapshot.isEmpty else { return }
+            pasteboard.clearContents()
+            pasteboard.writeObjects(snapshot)
         }
     }
 

@@ -17,6 +17,8 @@ final class AppState {
     // MARK: - State
     var isRecording = false
     var isProcessing = false
+    var recordingStartedAt: Date?   // drives the live elapsed timer while recording
+    var processingStartedAt: Date?  // drives the live elapsed timer while transcribing
     var lastTranscription: String?
     var pendingTranscription: String?  // Transcription that couldn't be injected (user switched apps)
     var error: AppError?
@@ -110,6 +112,7 @@ final class AppState {
         transcriptionTask?.cancel()
         transcriptionTask = nil
         isProcessing = false
+        processingStartedAt = nil
         // Clear any error state - user intentionally canceled
         error = nil
         playCancelSound()
@@ -140,6 +143,7 @@ final class AppState {
                 }
             }
             isRecording = true
+            recordingStartedAt = Date()
             wasAutoStopped = false  // Reset flag when starting new recording
         } catch {
             self.error = .recordingFailed(error.localizedDescription)
@@ -148,7 +152,9 @@ final class AppState {
 
     private func stopRecordingAndTranscribe() async {
         isRecording = false
+        recordingStartedAt = nil
         isProcessing = true
+        processingStartedAt = Date()
         wasCanceled = false  // Reset cancel flag at start of transcription
 
         do {
@@ -181,6 +187,7 @@ final class AppState {
                 print("[Jetvoice] ERROR: Accessibility not granted")
                 error = .accessibilityPermissionDenied
                 isProcessing = false
+                processingStartedAt = nil
                 return
             }
 
@@ -190,6 +197,7 @@ final class AppState {
                 handleFocusLost(transcription: transcription)
                 playTranscribedSound()  // Still play sound - transcription is ready
                 isProcessing = false
+                processingStartedAt = nil
                 return
             }
 
@@ -226,6 +234,7 @@ final class AppState {
         }
 
         isProcessing = false
+        processingStartedAt = nil
     }
 
     /// Handle when user switches apps during text injection
@@ -250,24 +259,24 @@ final class AppState {
 
     // MARK: - Feedback
 
-    private func playTranscribedSound() {
-        // Use UserDefaults directly since @AppStorage conflicts with @Observable
-        guard UserDefaults.standard.bool(forKey: "playSounds") || !UserDefaults.standard.dictionaryRepresentation().keys.contains("playSounds") else { return }
+    // Sounds are on by default; only "playSounds == false" silences them.
+    // Read UserDefaults directly since @AppStorage conflicts with @Observable.
+    private var shouldPlaySounds: Bool {
+        UserDefaults.standard.object(forKey: "playSounds") as? Bool ?? true
+    }
 
+    private func playTranscribedSound() {
+        guard shouldPlaySounds else { return }
         soundPlayer.playTranscribedSound()
     }
 
     private func playCancelSound() {
-        // Use UserDefaults directly since @AppStorage conflicts with @Observable
-        guard UserDefaults.standard.bool(forKey: "playSounds") || !UserDefaults.standard.dictionaryRepresentation().keys.contains("playSounds") else { return }
-
+        guard shouldPlaySounds else { return }
         soundPlayer.playCancelSound()
     }
 
     private func playStopSound() {
-        // Use UserDefaults directly since @AppStorage conflicts with @Observable
-        guard UserDefaults.standard.bool(forKey: "playSounds") || !UserDefaults.standard.dictionaryRepresentation().keys.contains("playSounds") else { return }
-
+        guard shouldPlaySounds else { return }
         soundPlayer.playStopSound()
     }
 }
@@ -289,10 +298,8 @@ struct PermissionState: Equatable {
 enum AppError: LocalizedError, Identifiable, Equatable {
     case microphonePermissionDenied
     case accessibilityPermissionDenied
-    case inputMonitoringDenied
     case recordingFailed(String)
     case transcriptionFailed(String)
-    case networkError(String)
     case noAudioRecorded
 
     var id: String { localizedDescription }
@@ -303,29 +310,12 @@ enum AppError: LocalizedError, Identifiable, Equatable {
             return "Microphone access is required to record audio."
         case .accessibilityPermissionDenied:
             return "Accessibility access is required to type transcribed text."
-        case .inputMonitoringDenied:
-            return "Input monitoring is required for the global hotkey."
         case .recordingFailed(let message):
             return "Recording failed: \(message)"
         case .transcriptionFailed(let message):
             return "Transcription failed: \(message)"
-        case .networkError(let message):
-            return "Network error: \(message)"
         case .noAudioRecorded:
             return "No audio was recorded."
         }
-    }
-
-    // Factory methods for creating errors from Error types
-    static func recording(_ error: Error) -> AppError {
-        .recordingFailed(error.localizedDescription)
-    }
-
-    static func transcription(_ error: Error) -> AppError {
-        .transcriptionFailed(error.localizedDescription)
-    }
-
-    static func network(_ error: Error) -> AppError {
-        .networkError(error.localizedDescription)
     }
 }

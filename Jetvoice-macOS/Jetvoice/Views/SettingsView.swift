@@ -43,12 +43,12 @@ struct SettingsView: View {
 
 enum GeminiModel: String, CaseIterable {
     case gemini25Flash = "gemini-2.5-flash"
-    case gemini3Flash = "gemini-3-flash-preview"
+    case gemini3Flash = "gemini-3.5-flash"
 
     var displayName: String {
         switch self {
         case .gemini25Flash: return "Gemini 2.5 Flash"
-        case .gemini3Flash: return "Gemini 3.0 Flash"
+        case .gemini3Flash: return "Gemini 3.5 Flash"
         }
     }
 }
@@ -167,7 +167,7 @@ struct APISettingsView: View {
 
 // MARK: - Keychain Helper
 
-enum KeychainHelper {
+nonisolated enum KeychainHelper {
     private static let service = "ai.jetvoice.api"
     private static let account = "gemini-api-key"
 

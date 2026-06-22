@@ -6,11 +6,15 @@
 //
 
 import Foundation
-import Security
 
 actor GeminiService {
     private let baseURL = "https://generativelanguage.googleapis.com/v1beta"
+    private let uploadURL = "https://generativelanguage.googleapis.com/upload/v1beta/files"
     private let defaultModel = "gemini-2.5-flash"
+
+    // Audio at or above this size is uploaded via the Files API instead of being
+    // inlined as base64 (which inflates ~33% and risks the ~20MB request cap).
+    private static let inlineSizeLimit = 8 * 1024 * 1024  // 8MB (~4 min @ 16kHz mono)
 
     private let session: URLSession
 
@@ -31,32 +35,6 @@ actor GeminiService {
         UserDefaults.standard.string(forKey: "selectedGeminiModel") ?? defaultModel
     }
 
-    // Fetch API key from Keychain
-    private func getAPIKey() -> String? {
-        let service = "ai.jetvoice.api"
-        let account = "gemini-api-key"
-
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        guard status == errSecSuccess,
-              let data = result as? Data,
-              let key = String(data: data, encoding: .utf8),
-              !key.isEmpty else {
-            return nil
-        }
-
-        return key
-    }
-
     // MARK: - API Models
 
     struct TranscriptionRequest: Codable {
@@ -70,15 +48,23 @@ actor GeminiService {
         struct Part: Codable {
             let text: String?
             let inlineData: InlineData?
+            let fileData: FileData?
 
             struct InlineData: Codable {
                 let mimeType: String
                 let data: String  // Base64 encoded
             }
 
+            // Reference to an audio file already uploaded via the Files API.
+            struct FileData: Codable {
+                let mimeType: String
+                let fileUri: String
+            }
+
             init(text: String) {
                 self.text = text
                 self.inlineData = nil
+                self.fileData = nil
             }
 
             init(audioData: Data, mimeType: String) {
@@ -87,12 +73,28 @@ actor GeminiService {
                     mimeType: mimeType,
                     data: audioData.base64EncodedString()
                 )
+                self.fileData = nil
+            }
+
+            init(fileURI: String, mimeType: String) {
+                self.text = nil
+                self.inlineData = nil
+                self.fileData = FileData(mimeType: mimeType, fileUri: fileURI)
             }
         }
 
         struct GenerationConfig: Codable {
             let temperature: Double?
             let maxOutputTokens: Int?
+            let thinkingConfig: ThinkingConfig?
+
+            // Gemini 3 models "think" by default, which adds latency and can
+            // consume the entire output-token budget before any transcription
+            // is emitted (looks like an infinite hang). Transcription needs no
+            // reasoning, so we disable thinking. Harmless on 2.5 Flash too.
+            struct ThinkingConfig: Codable {
+                let thinkingBudget: Int
+            }
         }
     }
 
@@ -135,9 +137,20 @@ actor GeminiService {
             throw GeminiError.audioTooLarge(sizeMB: sizeMB)
         }
 
-        guard let apiKey = getAPIKey() else {
+        guard let apiKey = KeychainHelper.getAPIKey(), !apiKey.isEmpty else {
             print("[Jetvoice] ERROR: API key not configured")
             throw GeminiError.apiKeyNotConfigured
+        }
+
+        // Small clips go inline (lowest latency); larger ones use the Files API
+        // to avoid base64 bloat and the inline request-size cap.
+        let audioPart: TranscriptionRequest.Part
+        if audioData.count >= Self.inlineSizeLimit {
+            print("[Jetvoice] Audio \(audioData.count) bytes ≥ inline limit, using Files API")
+            let fileURI = try await uploadAudio(audioData, mimeType: "audio/wav", apiKey: apiKey)
+            audioPart = TranscriptionRequest.Part(fileURI: fileURI, mimeType: "audio/wav")
+        } else {
+            audioPart = TranscriptionRequest.Part(audioData: audioData, mimeType: "audio/wav")
         }
 
         let request = TranscriptionRequest(
@@ -148,12 +161,13 @@ actor GeminiService {
                         Output only the verbatim transcription text — no language labels, \
                         no commentary, no formatting, no prefixes, no metadata.
                         """),
-                    TranscriptionRequest.Part(audioData: audioData, mimeType: "audio/wav")
+                    audioPart
                 ])
             ],
             generationConfig: TranscriptionRequest.GenerationConfig(
                 temperature: 0.1,  // Low temperature for accuracy
-                maxOutputTokens: 65536  // ~50,000 words, enough for 10+ minutes of speech
+                maxOutputTokens: 65536,  // ~50,000 words, enough for 10+ minutes of speech
+                thinkingConfig: .init(thinkingBudget: 0)  // disable thinking — fixes Gemini 3 hang
             )
         )
 
@@ -172,12 +186,35 @@ actor GeminiService {
         let encoder = JSONEncoder()
         urlRequest.httpBody = try encoder.encode(request)
 
-        print("[Jetvoice] Sending request to Gemini API...")
-        let (data, response) = try await session.data(for: urlRequest)
-        print("[Jetvoice] Response received, size: \(data.count) bytes")
+        // The Gemini API intermittently returns transient empty-body 404/5xx
+        // (and 429) responses under load. Retry a few times with backoff before
+        // surfacing an error so a flaky response doesn't fail a transcription.
+        let maxAttempts = 3
+        var data = Data()
+        var httpResponse: HTTPURLResponse!
+        for attempt in 1...maxAttempts {
+            try Task.checkCancellation()
+            print("[Jetvoice] Sending request to Gemini API (attempt \(attempt)/\(maxAttempts))...")
+            let (respData, response) = try await session.data(for: urlRequest)
 
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw GeminiError.invalidResponse
+            guard let http = response as? HTTPURLResponse else {
+                throw GeminiError.invalidResponse
+            }
+            data = respData
+            httpResponse = http
+            print("[Jetvoice] Response received: HTTP \(http.statusCode), \(respData.count) bytes")
+
+            let isTransient = http.statusCode == 404
+                || http.statusCode == 429
+                || http.statusCode >= 500
+                || respData.isEmpty
+            if isTransient && attempt < maxAttempts {
+                let delayNs = UInt64(attempt) * 500_000_000  // 0.5s, then 1.0s
+                print("[Jetvoice] Transient response, retrying in \(Double(delayNs) / 1e9)s...")
+                try await Task.sleep(nanoseconds: delayNs)
+                continue
+            }
+            break
         }
 
         // Decode response
@@ -205,6 +242,78 @@ actor GeminiService {
         print("[Jetvoice] Transcription extracted: '\(text.prefix(100))...'")
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    // MARK: - Files API
+
+    private struct FileResource: Codable {
+        let uri: String?
+        let name: String?
+        let state: String?
+    }
+    private struct FileEnvelope: Codable {
+        let file: FileResource?
+    }
+
+    /// Upload audio via the Gemini resumable Files API and return its file URI,
+    /// waiting until the file is ACTIVE (ready to be referenced in a prompt).
+    private func uploadAudio(_ audioData: Data, mimeType: String, apiKey: String) async throws -> String {
+        guard let startURL = URL(string: uploadURL) else { throw GeminiError.invalidURL }
+
+        // 1. Start a resumable upload session.
+        var start = URLRequest(url: startURL)
+        start.httpMethod = "POST"
+        start.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+        start.setValue("resumable", forHTTPHeaderField: "X-Goog-Upload-Protocol")
+        start.setValue("start", forHTTPHeaderField: "X-Goog-Upload-Command")
+        start.setValue("\(audioData.count)", forHTTPHeaderField: "X-Goog-Upload-Header-Content-Length")
+        start.setValue(mimeType, forHTTPHeaderField: "X-Goog-Upload-Header-Content-Type")
+        start.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        start.httpBody = try JSONEncoder().encode(["file": ["display_name": "jetvoice_audio"]])
+
+        let (_, startResponse) = try await session.data(for: start)
+        guard let startHTTP = startResponse as? HTTPURLResponse,
+              startHTTP.statusCode == 200,
+              let sessionURLString = startHTTP.value(forHTTPHeaderField: "X-Goog-Upload-URL"),
+              let sessionURL = URL(string: sessionURLString) else {
+            throw GeminiError.fileUploadFailed("Could not start upload session")
+        }
+
+        // 2. Upload the bytes and finalize in one request.
+        var upload = URLRequest(url: sessionURL)
+        upload.httpMethod = "POST"
+        upload.setValue("\(audioData.count)", forHTTPHeaderField: "Content-Length")
+        upload.setValue("0", forHTTPHeaderField: "X-Goog-Upload-Offset")
+        upload.setValue("upload, finalize", forHTTPHeaderField: "X-Goog-Upload-Command")
+        upload.httpBody = audioData
+
+        let (uploadData, uploadResponse) = try await session.data(for: upload)
+        guard let uploadHTTP = uploadResponse as? HTTPURLResponse, uploadHTTP.statusCode == 200 else {
+            throw GeminiError.fileUploadFailed("Upload failed")
+        }
+
+        var file = try JSONDecoder().decode(FileEnvelope.self, from: uploadData).file
+        guard let name = file?.name, let initialURI = file?.uri else {
+            throw GeminiError.fileUploadFailed("No file URI returned")
+        }
+
+        // 3. Poll until the file leaves PROCESSING (audio usually clears quickly).
+        var attempts = 0
+        while (file?.state ?? "ACTIVE") == "PROCESSING" && attempts < 15 {
+            try await Task.sleep(nanoseconds: 500_000_000)  // 0.5s
+            attempts += 1
+            guard let statusURL = URL(string: "\(baseURL)/\(name)") else { break }
+            var statusReq = URLRequest(url: statusURL)
+            statusReq.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+            let (statusData, _) = try await session.data(for: statusReq)
+            file = try? JSONDecoder().decode(FileResource.self, from: statusData)
+        }
+
+        if let state = file?.state, state != "ACTIVE" {
+            throw GeminiError.fileUploadFailed("File not ready (state: \(state))")
+        }
+
+        return file?.uri ?? initialURI
+    }
 }
 
 // MARK: - Errors
@@ -217,9 +326,12 @@ enum GeminiError: LocalizedError {
     case apiError(code: Int, message: String)
     case noTranscriptionReturned
     case audioTooLarge(sizeMB: Double)
+    case fileUploadFailed(String)
 
     var errorDescription: String? {
         switch self {
+        case .fileUploadFailed(let message):
+            return "Audio upload failed: \(message)"
         case .apiKeyNotConfigured:
             return "Gemini API key is not configured"
         case .invalidURL:

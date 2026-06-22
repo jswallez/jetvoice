@@ -8,6 +8,7 @@
 
 import SwiftUI
 import AppKit
+import Observation
 
 // Shared app state - single instance for the entire app
 @MainActor
@@ -35,7 +36,6 @@ enum AppMain {
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
-    private var iconUpdateTimer: Timer?
     private var settingsWindow: NSWindow?
     private var onboardingWindow: NSWindow?
 
@@ -46,17 +46,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Setup the status bar item
         setupStatusItem()
 
-        // Use a simple timer to poll the state for icon updates
-        iconUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
-                self.updateStatusItemIcon()
-            }
-        }
+        // Update the menu bar icon reactively whenever the relevant state changes,
+        // instead of polling on a 10Hz timer (which kept the CPU awake at idle).
+        updateStatusItemIcon()
+        observeStateForIcon()
 
         // Show onboarding on first launch
         if !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
             showOnboarding()
+        }
+    }
+
+    /// Re-arming observation: fires once per change to the tracked state, then
+    /// re-subscribes. The icon update is dispatched async so it runs *after* the
+    /// mutation is applied (the onChange handler fires just before willSet).
+    private func observeStateForIcon() {
+        withObservationTracking {
+            _ = sharedAppState.isRecording
+            _ = sharedAppState.isProcessing
+            _ = sharedAppState.pendingTranscription
+            _ = sharedAppState.error
+        } onChange: {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.updateStatusItemIcon()
+                self.observeStateForIcon()
+            }
         }
     }
 
@@ -197,17 +212,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Make sure popover window can become key
         newPopover.contentViewController?.view.window?.makeKey()
 
-        // Clear the red dot when user opens popover (they've seen the pending notification or error)
         // Move pending to lastTranscription so they can still see/copy it
         if let pending = sharedAppState.pendingTranscription {
             sharedAppState.lastTranscription = pending
             sharedAppState.clearPendingTranscription()
         }
 
-        // Clear error when user opens popover — they've acknowledged it
-        if sharedAppState.error != nil {
-            sharedAppState.error = nil
-        }
+        // NOTE: we intentionally do NOT clear `error` here. The popover shows the
+        // error message via MenuBarView; clearing it on open meant a glance at the
+        // popover wiped the reason before it could be read. It clears on the next
+        // recording (startRecording resets it).
     }
 
     // MARK: - Window Management
@@ -251,9 +265,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // Clean up
-        iconUpdateTimer?.invalidate()
-
         Task {
             await sharedAppState.audioRecorder.cancelRecording()
             sharedAppState.hotKeyManager.stop()

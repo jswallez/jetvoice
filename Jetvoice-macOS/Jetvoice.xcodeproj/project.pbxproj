@@ -6,8 +6,26 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		3782FE8A9B840A87A588B631 /* JetvoiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9375E26C46706A6E7FAC8B59 /* JetvoiceTests.swift */; };
+		7A7405E97B92893AA3B0712B /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 092058C7CAECCE4E89ACBB5D /* Cocoa.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		2292F3C5FE10E7D3426E56EB /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4BA554B62F0FC72F00627197 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4BA554BD2F0FC72F00627197;
+			remoteInfo = Jetvoice;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
+		092058C7CAECCE4E89ACBB5D /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
+		180E5D3112C21921BB77CFBB /* JetvoiceTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = JetvoiceTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4BA554BE2F0FC72F00627197 /* Jetvoice.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jetvoice.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9375E26C46706A6E7FAC8B59 /* JetvoiceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JetvoiceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -39,14 +57,33 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		551EC52F88F4511390E9BDBC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7A7405E97B92893AA3B0712B /* Cocoa.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		21389CCBA24A43257852BFE9 /* JetvoiceTests */ = {
+			isa = PBXGroup;
+			children = (
+				9375E26C46706A6E7FAC8B59 /* JetvoiceTests.swift */,
+			);
+			name = JetvoiceTests;
+			path = JetvoiceTests;
+			sourceTree = "<group>";
+		};
 		4BA554B52F0FC72F00627197 = {
 			isa = PBXGroup;
 			children = (
 				4BA554C02F0FC72F00627197 /* Jetvoice */,
 				4BA554BF2F0FC72F00627197 /* Products */,
+				EE7B9408EFB566D0F1C34515 /* Frameworks */,
+				21389CCBA24A43257852BFE9 /* JetvoiceTests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -54,8 +91,25 @@
 			isa = PBXGroup;
 			children = (
 				4BA554BE2F0FC72F00627197 /* Jetvoice.app */,
+				180E5D3112C21921BB77CFBB /* JetvoiceTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		E596D3D3A38CA39D3F825551 /* OS X */ = {
+			isa = PBXGroup;
+			children = (
+				092058C7CAECCE4E89ACBB5D /* Cocoa.framework */,
+			);
+			name = "OS X";
+			sourceTree = "<group>";
+		};
+		EE7B9408EFB566D0F1C34515 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				E596D3D3A38CA39D3F825551 /* OS X */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -77,11 +131,27 @@
 				4BA554C02F0FC72F00627197 /* Jetvoice */,
 			);
 			name = Jetvoice;
-			packageProductDependencies = (
-			);
 			productName = Jetvoice;
 			productReference = 4BA554BE2F0FC72F00627197 /* Jetvoice.app */;
 			productType = "com.apple.product-type.application";
+		};
+		C17F0BDCE757FFFE1C19D2F1 /* JetvoiceTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F21BC56F14D9ADB555FF5F7E /* Build configuration list for PBXNativeTarget "JetvoiceTests" */;
+			buildPhases = (
+				E63C9774C17044878F6ACD39 /* Sources */,
+				551EC52F88F4511390E9BDBC /* Frameworks */,
+				4CC45F8CBED12D9B6984CD88 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				1537CD3671D85D0451C56AA1 /* PBXTargetDependency */,
+			);
+			name = JetvoiceTests;
+			productName = JetvoiceTests;
+			productReference = 180E5D3112C21921BB77CFBB /* JetvoiceTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
@@ -107,20 +177,26 @@
 			);
 			mainGroup = 4BA554B52F0FC72F00627197;
 			minimizedProjectReferenceProxies = 1;
-			packageReferences = (
-			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 4BA554BF2F0FC72F00627197 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				4BA554BD2F0FC72F00627197 /* Jetvoice */,
+				C17F0BDCE757FFFE1C19D2F1 /* JetvoiceTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		4BA554BC2F0FC72F00627197 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4CC45F8CBED12D9B6984CD88 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -137,9 +213,49 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E63C9774C17044878F6ACD39 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3782FE8A9B840A87A588B631 /* JetvoiceTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		1537CD3671D85D0451C56AA1 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = Jetvoice;
+			target = 4BA554BD2F0FC72F00627197 /* Jetvoice */;
+			targetProxy = 2292F3C5FE10E7D3426E56EB /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		3C916AA219FEF0111A041D86 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = SH25ZAFZB5;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.jetvoice.JetvoiceTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Jetvoice.app/Contents/MacOS/Jetvoice";
+			};
+			name = Release;
+		};
 		4BA554C92F0FC73000627197 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -293,7 +409,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0.3;
+				MARKETING_VERSION = 1.0.4;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.jetvoice.Jetvoice;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -335,7 +451,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0.3;
+				MARKETING_VERSION = 1.0.4;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.jetvoice.Jetvoice;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -347,6 +463,29 @@
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
+		};
+		AAF56151F7780E28CBC1DC10 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = SH25ZAFZB5;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.jetvoice.JetvoiceTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Jetvoice.app/Contents/MacOS/Jetvoice";
+			};
+			name = Debug;
 		};
 /* End XCBuildConfiguration section */
 
@@ -365,6 +504,15 @@
 			buildConfigurations = (
 				4BA554CC2F0FC73000627197 /* Debug */,
 				4BA554CD2F0FC73000627197 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F21BC56F14D9ADB555FF5F7E /* Build configuration list for PBXNativeTarget "JetvoiceTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3C916AA219FEF0111A041D86 /* Release */,
+				AAF56151F7780E28CBC1DC10 /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
